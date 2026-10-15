@@ -1542,7 +1542,7 @@
   "proxy_port_invalid": "请输入 1 到 65535 之间的端口",
   "android_desc": "适用于 Android 移动端系统",
   "windows_desc": "适用于 Windows 桌面操作系统",
-  "linux_desc": "适用于 Linux 桌面操作系统（x64）",
+  "linux_desc": "适用于 Linux 桌面操作系统（x64 / arm64）",
   "macos_desc": "适用于 macOS 桌面操作系统",
   "arch_arm64": "ARM64 (64位)",
   "arch_arm32": "ARM32 (通用)",

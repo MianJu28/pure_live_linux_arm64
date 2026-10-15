@@ -18,6 +18,11 @@ on:
         required: true
         type: boolean
         default: true
+      build_linux_arm64:
+        description: Build Linux arm64 DEB and portable archives (needs the published arm64 FFmpeg bundle)
+        required: true
+        type: boolean
+        default: false
       build_macos:
         description: Build macOS universal application archive
         required: true
@@ -364,15 +369,24 @@ jobs:
           if-no-files-found: error
           retention-days: 3
   linux:
-    name: Linux x64 DEB + portable
+    name: Linux ${{ matrix.arch }} DEB + portable
+    # x64 and arm64 share every step; only the runner, the Flutter output
+    # directory (build/linux/<arch>/release/bundle) and the artifact names
+    # differ. The matrix is built from the two inputs so a run that selects only
+    # one architecture never schedules the other. `tool/prefetch_linux_native.sh`
+    # resolves the per-architecture FFmpeg hook archive.
     if: >-
       ${{
         always() &&
-        inputs.build_linux &&
+        (inputs.build_linux || inputs.build_linux_arm64) &&
         (needs.quality.result == 'success' || needs.quality.result == 'skipped')
       }}
     needs: [quality]
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ (inputs.build_linux && inputs.build_linux_arm64) && fromJSON('["x64","arm64"]') || (inputs.build_linux && fromJSON('["x64"]')) || fromJSON('["arm64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -417,13 +431,56 @@ jobs:
             libxfixes-dev \
             libxcb1-dev
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        if: matrix.arch == 'x64'
         with:
           channel: stable
           cache: true
+      # The Flutter release manifest (releases_linux.json) has no arm64 entries,
+      # so subosito/flutter-action cannot resolve a Linux arm64 SDK: it fails with
+      # "Unable to determine Flutter version ... architecture: arm64". Flutter's
+      # supported way to get an arm64 SDK is to build it from the framework
+      # repository on the arm64 host, which bootstraps the officially published
+      # linux-arm64 engine artifacts. Keep the version in step with .fvmrc.
+      - name: Cache arm64 Flutter SDK
+        if: matrix.arch == 'arm64'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/flutter-arm64
+          key: flutter-sdk-arm64-3.47.5
+      - name: Set up arm64 Flutter SDK
+        if: matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$HOME/flutter-arm64/flutter"
+          if [ ! -x "$SDK/bin/flutter" ]; then
+            rm -rf "$HOME/flutter-arm64"
+            mkdir -p "$HOME/flutter-arm64"
+            git clone --depth 1 --branch 3.47.5 \
+              https://github.com/flutter/flutter.git "$SDK"
+          fi
+          git config --global --add safe.directory "$SDK"
+          echo "FLUTTER_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/bin" >> "$GITHUB_PATH"
+          echo "$SDK/bin/cache/dart-sdk/bin" >> "$GITHUB_PATH"
       - name: Verify Flutter SDK
         run: flutter --version
       - name: Resolve packages
         run: flutter pub get --enforce-lockfile
+      - name: Prefetch pinned FFmpeg bundle
+        shell: bash
+        # Puts the pinned bundle-base-linux-<arch>-shared-lgpl.zip into the hook
+        # cache so the build does not depend on an unrelated builder release.
+        env:
+          LINUX_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          case "$LINUX_ARCH" in
+            x64) host_arch=x86_64 ;;
+            arm64) host_arch=arm64 ;;
+            *) echo "Unknown matrix arch: $LINUX_ARCH" >&2; exit 1 ;;
+          esac
+          ./tool/prefetch_linux_native.sh --arch "$host_arch"
       - name: Generate production AppConfig
         run: |
           dart run enven \
@@ -436,13 +493,31 @@ jobs:
             --dart-define=PURELIVE_BUILD_SOURCE=github-manual
       - uses: ./.github/actions/get-version
         id: version
+      - name: Stage and verify FFmpeg runtime
+        shell: bash
+        env:
+          LINUX_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          case "$LINUX_ARCH" in
+            x64) host_arch=x86_64 ;;
+            arm64) host_arch=arm64 ;;
+          esac
+          bundle="build/linux/${LINUX_ARCH}/release/bundle"
+          python3 tool/verify_ffmpeg_native.py linux \
+            "$bundle" \
+            --arch "$host_arch" \
+            --stage-linux
       - name: Create portable archives
         shell: bash
+        env:
+          LINUX_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.artifact_version }}"
-          tar -C build/linux/x64/release/bundle -czf "PureLive-${VERSION}-linux-x64.tar.gz" .
-          (cd build/linux/x64/release/bundle && zip -qr "$GITHUB_WORKSPACE/PureLive-${VERSION}-linux-x64.zip" .)
+          bundle="build/linux/${LINUX_ARCH}/release/bundle"
+          tar -C "$bundle" -czf "PureLive-${VERSION}-linux-${LINUX_ARCH}.tar.gz" .
+          (cd "$bundle" && zip -qr "$GITHUB_WORKSPACE/PureLive-${VERSION}-linux-${LINUX_ARCH}.zip" .)
       - name: Install pinned Linux packager
         run: |
           dart pub global activate fastforge "$FASTFORGE_VERSION"
@@ -451,9 +526,11 @@ jobs:
         shell: bash
         # fastforge re-runs `flutter build linux` internally (there is no
         # --skip-build), so the dart-define has to be passed through again.
+        env:
+          LINUX_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          size_kb=$(du -sk build/linux/x64/release/bundle | cut -f1)
+          size_kb=$(du -sk "build/linux/${LINUX_ARCH}/release/bundle" | cut -f1)
           sed -i "s/^installed_size: .*/installed_size: ${size_kb}/" linux/packaging/deb/make_config.yaml
           fastforge package \
             --platform linux \
@@ -463,6 +540,8 @@ jobs:
           ls -lh dist/
       - name: Rename Linux DEB
         shell: bash
+        env:
+          LINUX_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.artifact_version }}"
@@ -471,17 +550,17 @@ jobs:
             echo "DEB package not found under dist/." >&2
             exit 1
           fi
-          mv "$deb_source" "PureLive-${VERSION}-linux-x64.deb"
-          dpkg-deb --field "PureLive-${VERSION}-linux-x64.deb" Package Version Architecture Depends
-          ls -lh "PureLive-${VERSION}-linux-x64.tar.gz" "PureLive-${VERSION}-linux-x64.zip" "PureLive-${VERSION}-linux-x64.deb"
+          mv "$deb_source" "PureLive-${VERSION}-linux-${LINUX_ARCH}.deb"
+          dpkg-deb --field "PureLive-${VERSION}-linux-${LINUX_ARCH}.deb" Package Version Architecture Depends
+          ls -lh "PureLive-${VERSION}-linux-${LINUX_ARCH}.tar.gz" "PureLive-${VERSION}-linux-${LINUX_ARCH}.zip" "PureLive-${VERSION}-linux-${LINUX_ARCH}.deb"
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pure-live-linux-x64
+          name: pure-live-linux-${{ matrix.arch }}
           path: |
-            PureLive-*-linux-x64.tar.gz
-            PureLive-*-linux-x64.zip
-            PureLive-*-linux-x64.deb
+            PureLive-*-linux-${{ matrix.arch }}.tar.gz
+            PureLive-*-linux-${{ matrix.arch }}.zip
+            PureLive-*-linux-${{ matrix.arch }}.deb
           if-no-files-found: error
           retention-days: 3
   apple:
@@ -690,11 +769,11 @@ jobs:
       ${{
         always() &&
         inputs.create_release &&
-        (inputs.build_android || inputs.build_windows || inputs.build_linux || inputs.build_macos || inputs.build_ios) &&
+        (inputs.build_android || inputs.build_windows || inputs.build_linux || inputs.build_linux_arm64 || inputs.build_macos || inputs.build_ios) &&
         (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
         (!inputs.build_android || needs.android.result == 'success') &&
         (!inputs.build_windows || needs.windows.result == 'success') &&
-        (!inputs.build_linux || needs.linux.result == 'success') &&
+        (!(inputs.build_linux || inputs.build_linux_arm64) || needs.linux.result == 'success') &&
         (!(inputs.build_macos || inputs.build_ios) || needs.apple.result == 'success') }}
     needs:
       - quality
@@ -813,6 +892,7 @@ jobs:
                   "android": "${{ inputs.build_android }}",
                   "windows": "${{ inputs.build_windows }}",
                   "linux": "${{ inputs.build_linux }}",
+                  "linux_arm64": "${{ inputs.build_linux_arm64 }}",
                   "macos": "${{ inputs.build_macos }}",
                   "ios": "${{ inputs.build_ios }}",
                   "quality": "${{ inputs.run_quality }}",
@@ -854,7 +934,7 @@ jobs:
           - x86_64
           - 统一 SHA256 校验文件：[**ANDROID_SHA256SUM.txt**](https://github.com/liuchuancong/pure_live/releases/download/$RELEASE_TAG/ANDROID_SHA256SUM.txt)
           ### 🐧 Linux 版
-          - Linux x64
+          - x86_64 与 arm64
           - **DEB 安装包**：适合 Debian/Ubuntu 及其衍生发行版
           - **Portable ZIP / tar.gz**：解压即用，无需安装
           ### 🍎 iOS 版

@@ -50,6 +50,46 @@ class VerifyFFmpegNativeTest(unittest.TestCase):
             self.assertEqual(native.verify('linux', so, self.archive)['version'], 'n9.0.2')
             self.assertEqual(native.verify('linux', self.root, self.archive)['version'], 'n9.0.2')
 
+    def test_linux_accepts_arm64_elf(self):
+        so = self.root / 'libffmpegkit.so'
+        elf = bytearray(b'\x7fELF\x02' + b'\x00' * 32)
+        elf[18:20] = (183).to_bytes(2, 'little')
+        so.write_bytes(elf + b'FFmpeg version n9.0.2 GLIBC_2.38')
+        with mock.patch.dict(native.LINUX_ARCHIVE_SHA256, {'arm64': self.digest}):
+            self.assertEqual(native.verify('linux', so, self.archive, arch='arm64')['version'], 'n9.0.2')
+            elf[18:20] = (62).to_bytes(2, 'little')
+            so.write_bytes(elf + b'FFmpeg version n9.0.2 GLIBC_2.38')
+            with self.assertRaisesRegex(ValueError, 'not an arm64 ELF'):
+                native.verify('linux', so, self.archive, arch='arm64')
+
+    def test_linux_arm64_refuses_unpinned_archive(self):
+        so = self.root / 'libffmpegkit.so'
+        elf = bytearray(b'\x7fELF\x02' + b'\x00' * 32)
+        elf[18:20] = (183).to_bytes(2, 'little')
+        so.write_bytes(elf + b'FFmpeg version n9.0.2 GLIBC_2.38')
+        with mock.patch.dict(native.LINUX_ARCHIVE_SHA256, {'arm64': ''}):
+            with self.assertRaisesRegex(ValueError, 'no pinned SHA-256'):
+                native.verify('linux', so, self.archive, arch='arm64')
+            bundle = self.root / 'bundle'
+            bundle.mkdir()
+            with self.assertRaisesRegex(ValueError, 'no pinned SHA-256'):
+                native.stage_linux_runtime(bundle, self.archive, 'arm64')
+
+    def test_stages_verified_linux_arm64_runtime(self):
+        elf = bytearray(b'\x7fELF\x02' + b'\x00' * 32)
+        elf[18:20] = (183).to_bytes(2, 'little')
+        payload = bytes(elf) + b'FFmpeg version n9.0.2 GLIBC_2.38'
+        entry = native.LINUX_LIBRARY_ENTRIES['arm64']
+        with zipfile.ZipFile(self.archive, 'w') as package:
+            package.writestr(entry, payload)
+        pinned = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        bundle = self.root / 'bundle-arm64'
+        bundle.mkdir()
+        with mock.patch.dict(native.LINUX_ARCHIVE_SHA256, {'arm64': pinned}):
+            staged = native.stage_linux_runtime(bundle, self.archive, 'arm64')
+            self.assertEqual(staged.read_bytes(), payload)
+            self.assertEqual(native.verify('linux', bundle, self.archive, arch='arm64')['version'], 'n9.0.2')
+
     def test_rejects_replaced_hook_archive(self):
         dll = self.root / 'libffmpegkit.dll'
         dll.write_bytes(b'FFmpeg version n9.0.2')

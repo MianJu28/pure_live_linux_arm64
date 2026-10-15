@@ -131,6 +131,10 @@ Linux 版使用系统浏览器承接“继续网页搜索”，避免引入额�
 
 Ubuntu 24.04 构建会同时安装 `libva`、VDPAU、PulseAudio、Wayland、EGL 与 X11 开发包，以满足当前锁定 `libmpv.so` 的 glibc 2.38 / GLIBCXX 3.4.32 基线和链接依赖；Android 使用仓库内的同版本网页内核兼容副本通过 AGP 9.3.3 / R8 构建。Linux 归档携带应用与媒体库，目标系统仍需提供 GTK、托盘、显卡驱动和音频运行库。
 
+Linux 同时发布 `x64` 与 `arm64`：Flutter 按宿主机 CPU 把产物放在 `build/linux/<arch>/release/bundle`，应用内更新列表按运行架构选择 `linux-x64.*` 或 `linux-arm64.*`（arm64 缺失时回退 x64）。手动工作流的 `build_linux`/`build_linux_arm64` 开关驱动同一作业的 `x64`/`arm64` 矩阵，arm64 使用 `ubuntu-24.04-arm` Runner；打包前统一调用 `python tool/verify_ffmpeg_native.py linux <bundle> --arch <x86_64|arm64> --stage-linux` 校验并把 `libffmpegkit.so` 落位到 `<bundle>/lib/`。
+
+上游 `ffmpeg-kit-builders` 只发布 `linux-x86_64` 资产，Linux arm64 的 `libffmpegkit.so` 需先用 [tool/native/ffmpeg-kit-linux](../tool/native/ffmpeg-kit-linux/README.md) 的 `build-arm64.sh` 在 arm64 主机上构建，把 `bundle-base-linux-arm64-shared-lgpl.zip` 与 x86_64 资产并列上传到原生依赖预发布，并把 SHA-256 同步到 `tool/verify_ffmpeg_native.py` 与 `tool/prefetch_linux_native.sh`；在此之前 `build_linux_arm64` 会因校验失败而中止。arm64 的 `libmpv.so.2` 继续使用 media_kit 上游 `20260810` 资产（FFmpeg 7.1.5），与 FFmpeg Kit 的 n9.0.2 职责不同（播放 vs 录制/转封装）。
+
 ## 单独命令
 
 Android、Windows、Linux、macOS 与 iOS 的 FFmpeg Kit 使用项目[原生依赖资产预发布](https://github.com/liuchuancong/pure_live/releases/tag/native-ffmpeg-9.0.2-b1)中的 FFmpeg `n9.0.2`；不是应用版本号。运行本机完整构建脚本时会先校验下载文件的 SHA-256。直接执行下列 Flutter 命令前，也可先运行 `tool/prefetch_android_native.ps1`；最终以 APK 内 `libffmpegkit.so` 和 Windows `libffmpegkit.dll` 的版本、哈希与实际运行结果为准。Android AAR 包含 `arm64-v8a`、`armeabi-v7a`、`x86_64`；其中 arm64 与 x86_64 ELF `LOAD` 段按 16 KiB 对齐。Linux 资产使用 Ubuntu 24.04 基线，不能混用更高 glibc 环境编出的 ZIP。Apple 两端使用各自的 universal XCFramework ZIP，并在应用构建后校验实际打包的 Mach-O 架构与 `n9.0.2` 标记。

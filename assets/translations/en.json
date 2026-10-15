@@ -1542,7 +1542,7 @@
   "proxy_port_invalid": "Enter a port from 1 to 65535",
   "android_desc": "For Android mobile OS",
   "windows_desc": "For Windows desktop OS",
-  "linux_desc": "For Linux desktop OS (x64)",
+  "linux_desc": "For Linux desktop OS (x64 / arm64)",
   "macos_desc": "For macOS desktop OS",
   "arch_arm64": "ARM64 (64-bit)",
   "arch_arm32": "ARM32 (Universal)",

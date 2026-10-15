@@ -142,9 +142,23 @@ install(DIRECTORY "${NATIVE_ASSETS_DIR}"
 set(MPV_FALLBACK_LIBRARIES
   libva.so.2 libva-drm.so.2 libva-x11.so.2 libva-wayland.so.2 libvdpau.so.1
   libunwind.so.8 libarchive.so.13 libXss.so.1 libXv.so.1)
+
+# Multiarch lib directories differ per CPU. `CMAKE_LIBRARY_ARCHITECTURE` is the
+# triplet CMake already resolved for this target (x86_64-linux-gnu on amd64,
+# aarch64-linux-gnu on arm64); the literal triplets remain as a fallback for
+# toolchains that leave it empty. Without the arm64 entry the arm64 bundle lost
+# every fallback library and only logged warnings.
+set(MPV_FALLBACK_SEARCH_PATHS /usr/lib64 /usr/lib)
+if(CMAKE_LIBRARY_ARCHITECTURE)
+  list(INSERT MPV_FALLBACK_SEARCH_PATHS 0 "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+endif()
+foreach(triplet x86_64-linux-gnu aarch64-linux-gnu arm-linux-gnueabihf)
+  list(APPEND MPV_FALLBACK_SEARCH_PATHS "/usr/lib/${triplet}")
+endforeach()
+
 foreach(soname ${MPV_FALLBACK_LIBRARIES})
   find_file(MPV_FALLBACK_${soname} "${soname}"
-    PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)
+    PATHS ${MPV_FALLBACK_SEARCH_PATHS} NO_DEFAULT_PATH)
   if(MPV_FALLBACK_${soname})
     file(REAL_PATH "${MPV_FALLBACK_${soname}}" fallback_real)
     install(FILES "${fallback_real}" RENAME "${soname}"

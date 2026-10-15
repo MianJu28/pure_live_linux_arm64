@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:pure_live/core/index.dart';
+import 'package:pure_live/core/platform/platform_utils.dart';
+import 'package:pure_live/core/release/release_asset_urls.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 typedef VersionUpdateChecker = Future<bool> Function();
@@ -77,9 +79,9 @@ class VersionController extends GetxController {
 
       macosUrl.value = assetUrls['macos-universal.dmg'] ?? assetUrls['macos-universal.zip'] ?? '';
 
-      linuxDebUrl.value = assetUrls['linux-x64.deb'] ?? '';
-      linuxZipUrl.value = assetUrls['linux-x64.zip'] ?? '';
-      linuxTarGzUrl.value = assetUrls['linux-x64.tar.gz'] ?? '';
+      linuxDebUrl.value = _linuxAsset(assetUrls, 'deb');
+      linuxZipUrl.value = _linuxAsset(assetUrls, 'zip');
+      linuxTarGzUrl.value = _linuxAsset(assetUrls, 'tar.gz');
     } catch (_) {
       error.value = true;
       _clearReleaseState();
@@ -87,6 +89,15 @@ class VersionController extends GetxController {
       loading.value = false;
       _checking = false;
     }
+  }
+
+  /// Picks the Linux asset for [format] matching the running CPU architecture.
+  ///
+  /// x64 builds keep reading the long-standing `linux-x64` keys. arm64 builds
+  /// prefer `linux-arm64` and only fall back to x64 when the release has not
+  /// published an arm64 package yet.
+  static String _linuxAsset(Map<String, String> assetUrls, String format) {
+    return ReleaseAssetUrls.selectLinuxAsset(assetUrls, format, arm64: PlatformUtils.isArm64);
   }
 
   Map<String, String> _resolveAssetUrls(List<Map<String, dynamic>> assets) {

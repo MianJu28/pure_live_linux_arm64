@@ -3,6 +3,25 @@ class ReleaseAssetUrls {
 
   final List<Map<String, dynamic>> assets;
 
+  /// Selects the Linux asset for [format] (`deb`, `zip`, `tar.gz`).
+  ///
+  /// Linux publishes separate x64 and arm64 packages, so an arm64 build must
+  /// not keep offering the x64 download. The long-standing `linux-x64` key
+  /// remains the fallback so releases without arm64 packages still work.
+  static String selectLinuxAsset(
+    Map<String, String> assetUrls,
+    String format, {
+    required bool arm64,
+  }) {
+    if (arm64) {
+      final arm64Url = assetUrls['linux-arm64.$format'];
+      if (arm64Url != null && arm64Url.isNotEmpty) {
+        return arm64Url;
+      }
+    }
+    return assetUrls['linux-x64.$format'] ?? '';
+  }
+
   /// Finds the best matching asset URL.
   ///
   /// [requiredKeywords] must all be present in the file name.
@@ -170,6 +189,27 @@ class ReleaseAssetUrls {
     extensions: const <String>['.zip'],
   );
 
+  /// Linux arm64 tar.gz.
+  String? get linuxArm64 => _find(
+    requiredKeywords: const <String>['linux', 'arm64'],
+    preferredKeywords: const <String>[],
+    extensions: const <String>['.tar.gz'],
+  );
+
+  /// Linux arm64 DEB package.
+  String? get linuxArm64Deb => _find(
+    requiredKeywords: const <String>['linux', 'arm64'],
+    preferredKeywords: const <String>[],
+    extensions: const <String>['.deb'],
+  );
+
+  /// Linux arm64 portable ZIP.
+  String? get linuxArm64Zip => _find(
+    requiredKeywords: const <String>['linux', 'arm64'],
+    preferredKeywords: const <String>[],
+    extensions: const <String>['.zip'],
+  );
+
   /// iOS arm64 TrollStore IPA.
   String? get iosArm64TrollStore => _find(
     requiredKeywords: const <String>['ios', 'trollstore'],
@@ -206,6 +246,9 @@ class ReleaseAssetUrls {
     add('linux-x64.tar.gz', linuxX64);
     add('linux-x64.deb', linuxX64Deb);
     add('linux-x64.zip', linuxX64Zip);
+    add('linux-arm64.tar.gz', linuxArm64);
+    add('linux-arm64.deb', linuxArm64Deb);
+    add('linux-arm64.zip', linuxArm64Zip);
     add('ios-arm64-trollstore.ipa', iosArm64TrollStore);
     add('ios-arm64-unsigned-app.zip', iosArm64UnsignedApp);
 
